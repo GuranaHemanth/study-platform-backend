@@ -2,31 +2,55 @@ require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 const authRoutes = require("./routes/authRoutes");
 const roomRoutes = require("./routes/roomRoutes");
 
 const app = express();
 
-// Middleware
-app.use(express.json());
-app.use(cors());
+// Enhanced Security Middleware
+app.use(helmet());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? process.env.FRONTEND_URL 
+    : 'http://localhost:3000',
+  credentials: true
+}));
 
-// Database Connection
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ Connected to MongoDB"))
-  .catch(err => console.error("MongoDB connection error:", err));
+// Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
+
+// Database Connection with Retry Logic
+const connectWithRetry = () => {
+  mongoose.connect(process.env.MONGO_URI)
+    .then(() => console.log("✅ Connected to MongoDB"))
+    .catch(err => {
+      console.error("MongoDB connection error:", err);
+      setTimeout(connectWithRetry, 5000);
+    });
+};
+connectWithRetry();
 
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/rooms", roomRoutes);
 
-// Test Route
-app.get("/", (req, res) => res.send("Study Platform API"));
+// Health Check Endpoint
+app.get("/health", (req, res) => res.json({ status: "ok" }));
 
-// Error Handling
+// Enhanced Error Handling
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: "Something went wrong!" });
+  console.error(`[${new Date().toISOString()}] Error:`, err.stack);
+  res.status(500).json({
+    error: process.env.NODE_ENV === 'development' 
+      ? err.message 
+      : 'Internal Server Error'
+  });
 });
 
 const PORT = process.env.PORT || 5000;
